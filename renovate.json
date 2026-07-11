@@ -22,7 +22,7 @@
   "separateMinorPatch": false,
   "automerge": false,
   "platformAutomerge": false,
-  "rebaseWhen": "behind-base-branch",
+  "rebaseWhen": "conflicted",
   "branchPrefix": "renovate/",
   "ignoreDeps": [],
   "vulnerabilityAlerts": {
