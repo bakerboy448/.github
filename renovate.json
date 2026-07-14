@@ -5,6 +5,7 @@
     "config:best-practices",
     ":dependencyDashboard",
     ":semanticCommits",
+    "helpers:pinGitHubActionDigests",
     ":enableVulnerabilityAlertsWithLabel(security)"
   ],
   "schedule": [
@@ -35,6 +36,13 @@
     "automerge": true
   },
   "packageRules": [
+    {
+      "description": "Pin all GitHub Actions to immutable commit SHAs",
+      "matchManagers": [
+        "github-actions"
+      ],
+      "pinDigests": true
+    },
     {
       "description": "Group GHA minor/patch/digest — automerge when CI green",
       "matchManagers": [
