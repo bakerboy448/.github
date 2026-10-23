@@ -3,6 +3,7 @@
   "description": "Inlined house Renovate config — self-contained, public presets only.",
   "extends": [
     "config:best-practices",
+    "github>baker-scripts/.github:renovate-automerge",
     ":dependencyDashboard",
     ":semanticCommits",
     "helpers:pinGitHubActionDigests",
