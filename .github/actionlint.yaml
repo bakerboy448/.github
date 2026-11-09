@@ -1,0 +1,6 @@
+self-hosted-runner:
+  labels: [hetzner]
+paths:
+  .github/workflows/release-calver.yml:
+    ignore:
+      - 'unexpected key "queue" for "concurrency" section.*'
