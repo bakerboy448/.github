@@ -1,0 +1,139 @@
+---
+name: Release (calver)
+
+"on":
+  workflow_call:
+    inputs:
+      sha:
+        description: Validated commit SHA to release
+        type: string
+        required: true
+      prerelease:
+        description: Publish as a prerelease that never becomes Latest
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.repository }}
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  release:
+    name: Publish calver release
+    runs-on: [self-hosted, Linux, X64, hetzner]
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      SHA: ${{ inputs.sha }}
+      PRERELEASE: ${{ inputs.prerelease }}
+      CLIFF_VERSION: 2.14.2
+      CLIFF_SHA256: 24f397c733add5390fdceee3a2088588ab0d5f944ce00d34cb7029b888cf2db4
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.sha }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Install git-cliff
+        run: |
+          f="git-cliff-${CLIFF_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          curl -fsSL -o "$RUNNER_TEMP/$f" "https://github.com/orhun/git-cliff/releases/download/v${CLIFF_VERSION}/$f"
+          echo "${CLIFF_SHA256}  $RUNNER_TEMP/$f" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$f" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/git-cliff-${CLIFF_VERSION}" >> "$GITHUB_PATH"
+
+      - name: Write git-cliff config
+        run: |
+          cat > "$RUNNER_TEMP/cliff.toml" <<'TOML'
+          [changelog]
+          body = """
+          {% for group, commits in commits | group_by(attribute="group") %}
+          ### {{ group | striptags | trim | upper_first }}
+          {% for commit in commits -%}
+          - {{ commit.message | split(pat="\n") | first | trim }} ([{{ commit.id | truncate(length=7, end="") }}](https://github.com/{{ get_env(name="REPO") }}/commit/{{ commit.id }}))
+          {% endfor %}
+          {% endfor %}
+          """
+          trim = true
+
+          [git]
+          conventional_commits = true
+          filter_unconventional = false
+          filter_commits = false
+          topo_order = true
+          sort_commits = "oldest"
+          commit_parsers = [
+            { message = "^Merge ", skip = true },
+            { message = "^chore\\(release\\)", skip = true },
+            { body = ".*BREAKING", group = "<!-- 0 -->Breaking" },
+            { message = "^[a-z]+(\\([^)]*\\))?!:", group = "<!-- 0 -->Breaking" },
+            { message = "^(feat|New)\\b", group = "<!-- 1 -->Features" },
+            { message = "^(fix|Fixed)\\b", group = "<!-- 2 -->Fixes" },
+            { message = "^[a-z]+\\(deps[^)]*\\)", group = "<!-- 4 -->Dependencies" },
+            { message = "(?i)^(update|bump|pin|renovate|chore: update|chore: bump)\\b.*(dependenc|digest|image|action|version)", group = "<!-- 4 -->Dependencies" },
+            { message = "^(ci|ops|build|deploy|perf)\\b", group = "<!-- 3 -->Operations" },
+            { message = ".*", group = "<!-- 5 -->Other" },
+          ]
+          TOML
+
+      - name: Allocate tag and publish
+        run: |
+          set -euo pipefail
+          git fetch --tags --force origin
+          existing="$(gh api "repos/$REPO/releases" --paginate \
+            --jq ".[] | select(.target_commitish == \"$SHA\" or .tag_name != null) | [.tag_name, .target_commitish, .draft] | @tsv" || true)"
+
+          # Resume or no-op when this SHA already has a calver release or tag.
+          tags="$(git tag --list '[0-9][0-9][0-9][0-9].[0-9][0-9].[0-9][0-9]' '[0-9][0-9][0-9][0-9].[0-9][0-9].[0-9][0-9].[0-9]*')"
+          for t in $tags; do
+            tsha="$(git rev-list -n1 "$t")"
+            if [ "$tsha" = "$SHA" ]; then
+              echo "SHA already tagged $t; no-op."; exit 0
+            fi
+            if git merge-base --is-ancestor "$SHA" "$tsha"; then
+              echo "SHA is covered by newer release $t; superseded."; exit 0
+            fi
+          done
+          draft_tag="$(printf '%s\n' "$existing" | awk -F'\t' -v s="$SHA" '$2==s && $3=="true"{print $1; exit}')"
+
+          if [ -n "$draft_tag" ]; then
+            TAG="$draft_tag"
+          else
+            base="$(date -u +%Y.%m.%d)"
+            used="$( { printf '%s\n' "$tags"; printf '%s\n' "$existing" | cut -f1; } | grep -E "^${base//./\\.}(\.[0-9]+)?$" || true)"
+            TAG="$base"; n=2
+            while printf '%s\n' "$used" | grep -qx "$TAG"; do TAG="$base.$n"; n=$((n+1)); done
+          fi
+
+          prev=""
+          for t in $(git tag --list --sort=-creatordate '[0-9][0-9][0-9][0-9].[0-9][0-9].[0-9][0-9]' '[0-9][0-9][0-9][0-9].[0-9][0-9].[0-9][0-9].[0-9]*'); do
+            if git merge-base --is-ancestor "$t" "$SHA"; then prev="$t"; break; fi
+          done
+
+          export REPO
+          range="${prev:+$prev..}$SHA"
+          git-cliff --config "$RUNNER_TEMP/cliff.toml" --unreleased --tag "$TAG" "$range" > "$RUNNER_TEMP/notes.md"
+          if [ -n "$prev" ]; then
+            printf '\n**Full changelog**: https://github.com/%s/compare/%s...%s\n' "$REPO" "$prev" "$TAG" >> "$RUNNER_TEMP/notes.md"
+          fi
+          [ -s "$RUNNER_TEMP/notes.md" ] || echo "Initial release." > "$RUNNER_TEMP/notes.md"
+
+          if [ -z "$draft_tag" ]; then
+            gh release create "$TAG" --draft --target "$SHA" --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md"
+          else
+            gh release edit "$TAG" --notes-file "$RUNNER_TEMP/notes.md"
+          fi
+          if [ "$PRERELEASE" = "true" ]; then
+            gh release edit "$TAG" --draft=false --prerelease --latest=false
+          else
+            gh release edit "$TAG" --draft=false --latest
+          fi
+          echo "Published $TAG at $SHA"
