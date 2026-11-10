@@ -45,3 +45,34 @@ The calling job needs `permissions: contents: write`.
 ```
 
 Use conventional commit subjects (`feat:`, `fix:`, `ci:`) or the `New:` and `Fixed:` prefixes so the notes group correctly.
+
+### `release-calver-gated.yml`
+
+For repositories whose validation is split across several workflow files. A `workflow_run` list is an OR trigger, so this workflow queries the push runs of every listed workflow for the SHA and calls `release-calver.yml` only when all of them succeeded. Any other state defers the release until a later workflow completion re-evaluates the same SHA.
+
+| Input | Meaning |
+| --- | --- |
+| `sha` | `github.event.workflow_run.head_sha` |
+| `required_workflows` | Comma-separated workflow files that run on every push; a missing or unfinished run defers the release. |
+| `optional_workflows` | Comma-separated path-filtered workflow files; no run for the SHA means inapplicable, a run must succeed. |
+| `prerelease` | As in `release-calver.yml`. |
+
+The caller is a small `release.yml` triggered by `workflow_run` of those workflows, with `permissions: contents: write` and `actions: read`. Deployment workflows stay out of both lists.
+
+```yaml
+"on":
+  workflow_run:
+    workflows: [CI, Pre-commit]
+    types: [completed]
+    branches: [main]
+jobs:
+  release:
+    if: github.event.workflow_run.event == 'push' && github.event.workflow_run.conclusion == 'success'
+    permissions:
+      contents: write
+      actions: read
+    uses: bakerboy448/.github/.github/workflows/release-calver-gated.yml@<full-sha>
+    with:
+      sha: ${{ github.event.workflow_run.head_sha }}
+      required_workflows: ci.yml,pre-commit.yml
+```
