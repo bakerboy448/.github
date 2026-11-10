@@ -1,0 +1,26 @@
+---
+name: CI
+
+"on":
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  pre-commit:
+    # Fork PRs never run on the self-hosted runner.
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    uses: ./.github/workflows/pre-commit.yml
+
+  release:
+    needs: [pre-commit]
+    if: github.event_name == 'push' && needs.pre-commit.result == 'success'
+    permissions:
+      contents: write
+    uses: bakerboy448/.github/.github/workflows/release-calver.yml@625cd5467e2b71e44d10f06697535abca356f842
+    with:
+      sha: ${{ github.sha }}
