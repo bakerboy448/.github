@@ -34,7 +34,7 @@ jobs:
       SHA: ${{ inputs.sha }}
       PRERELEASE: ${{ inputs.prerelease }}
       CLIFF_VERSION: 2.14.2
-      CLIFF_SHA256: 24f397c733add5390fdceee3a2088588ab0d5f944ce00d34cb7029b888cf2db4
+      CLIFF_SHA256: 24f397c733add5390fdceee3a2088588ab0d5f944ce00d34cb7029b888cf2db4 # pragma: allowlist secret
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
